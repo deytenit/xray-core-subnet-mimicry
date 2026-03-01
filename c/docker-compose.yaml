@@ -1,0 +1,14 @@
+name: 'c'
+
+services:
+  xray:
+    image: ghcr.io/xtls/xray-core:26.1.23
+    container_name: c-xray
+    network_mode: host
+    volumes:
+      - ./xray.jsonc:/etc/xray/config.jsonc:ro
+    command: -c '/etc/xray/config.jsonc'
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW

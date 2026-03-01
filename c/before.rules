@@ -1,0 +1,41 @@
+# /etc/ufw/before.rules for Server C (10.3.0.0/16)
+#
+# These rules handle the transparent interception of 10.0.0.0/8 traffic 
+# destined for other nodes (e.g., 10.1.x.x or 10.2.x.x).
+
+COMMIT
+
+*mangle
+:XRAY - [0:0]
+:XRAY_MASK - [0:0]
+:DIVERT - [0:0]
+
+# Intercept Prerouting traffic (e.g. from local containers)
+-A XRAY -d 10.3.0.0/16 -j RETURN
+-A XRAY ! -d 10.0.0.0/8 -j RETURN
+-A XRAY -m mark --mark 0xff -j RETURN
+-A XRAY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 12345 --tproxy-mark 1
+-A XRAY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 12345 --tproxy-mark 1
+-A PREROUTING -j XRAY
+
+# Intercept Output traffic (originating from the server itself)
+-A XRAY_MASK -d 10.3.0.0/16 -j RETURN
+-A XRAY_MASK ! -d 10.0.0.0/8 -j RETURN
+-A XRAY_MASK -m mark --mark 0xff -j RETURN
+-A XRAY_MASK -p udp -j MARK --set-mark 1
+-A XRAY_MASK -p tcp -j MARK --set-mark 1
+-A OUTPUT -j XRAY_MASK
+
+-A DIVERT -j MARK --set-mark 1
+-A DIVERT -j ACCEPT
+-I PREROUTING -p tcp -m socket -j DIVERT
+
+COMMIT
+
+*filter
+# Allow internal traffic between our subnet and the mimicry range
+-A ufw-before-forward -s 10.3.0.0/16 -d 10.3.0.0/16 -j ACCEPT
+-A ufw-before-forward -s 10.3.0.0/16 -d 10.0.0.0/8 -m mark --mark 0x1 -j ACCEPT
+
+-A ufw-before-input -s 10.3.0.0/16 -d 10.3.0.0/16 -j ACCEPT
+-A ufw-before-input -s 10.3.0.0/16 -d 10.0.0.0/8 -m mark --mark 0x1 -j ACCEPT

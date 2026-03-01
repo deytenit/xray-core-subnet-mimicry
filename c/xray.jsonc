@@ -1,0 +1,131 @@
+{
+  // ==========================================
+  // SERVER C: SPOKE NODE (Subnet: 10.3.0.0/16)
+  // ==========================================
+  // This node is identical in purpose to Server B, 
+  // but it is the authority for the 10.3.x.x range.
+
+  "log": {
+    "loglevel": "info"
+  },
+
+  "dns": {
+    "servers": [
+      // Queries are forwarded to Server A's central DNS.
+      "10.1.1.3"
+    ]
+  },
+
+  "inbounds": [
+    {
+      // TPROXY INBOUND
+      "tag": "proxy-enclave",
+      "listen": "127.0.0.1",
+      "port": 12345,
+      "protocol": "tunnel",
+      "settings": {
+        "network": "tcp,udp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy",
+          "mark": 255
+        }
+      }
+    }
+  ],
+
+  "outbounds": [
+    {
+      // FREEDOM OUTBOUND
+      "protocol": "freedom",
+      "tag": "forward-direct",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255
+        }
+      }
+    },
+    {
+      // REVERSE TUNNEL INITIATION (Hubward)
+      "protocol": "vless",
+      "tag": "forward-a-reverse",
+      "settings": {
+        "address": "A-EXTERNAL-IP",
+        "port": 443,
+        "id": "REPLACE_WITH_UUID_C_REVERSE",
+        "level": 0,
+        "encryption": "none",
+        "flow": "xtls-rprx-vision",
+        "reverse": {
+          "tag": "reverse-c"
+        }
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "A-DOMAIN",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": ["h2", "http/1.1"]
+        }
+      }
+    },
+    {
+      // STANDARD PROXY OUTBOUND (Hubward)
+      "protocol": "vless",
+      "tag": "forward-a",
+      "settings": {
+        "address": "A-EXTERNAL-IP",
+        "port": 443,
+        "id": "REPLACE_WITH_UUID_C_DIRECT",
+        "level": 0,
+        "encryption": "none",
+        "flow": "xtls-rprx-vision"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "A-DOMAIN",
+          "allowInsecure": false,
+          "fingerprint": "chrome",
+          "alpn": ["h2", "http/1.1"]
+        }
+      }
+    }
+  ],
+
+  "routing": {
+    "rules": [
+      {
+        "inboundTag": [ "proxy-enclave" ],
+        "outboundTag": "forward-a"
+      },
+      {
+        "inboundTag": [ "reverse-c" ],
+        "outboundTag": "forward-direct"
+      },
+      {
+        // Local 10.3.x.x traffic is breakout directly.
+        "ip": ["10.3.0.0/16"],
+        "outboundTag": "forward-direct"
+      },
+      {
+        // All other 10.x.x.x traffic is proxied to Server A.
+        "ip": ["10.0.0.0/8"],
+        "outboundTag": "forward-a"
+      }
+    ]
+  }
+}

@@ -1,0 +1,50 @@
+# /etc/ufw/before.rules for Server A (10.1.0.0/16)
+#
+# These rules MUST be placed after the default boilerplate in UFW.
+# They handle the transparent interception of 10.0.0.0/8 traffic.
+
+COMMIT
+
+*mangle
+# Create custom chains for Xray interception
+:XRAY - [0:0]
+:XRAY_MASK - [0:0]
+:DIVERT - [0:0]
+
+# --- PREROUTING CHAIN (Traffic from other containers/nodes) ---
+# Don't intercept traffic for our own local subnet
+-A XRAY -d 10.1.0.0/16 -j RETURN
+# Don't intercept traffic outside the 10.0.0.0/8 mimicry range
+-A XRAY ! -d 10.0.0.0/8 -j RETURN
+# Avoid infinite loops by ignoring traffic already marked by Xray
+-A XRAY -m mark --mark 0xff -j RETURN
+# Transparently proxy UDP/TCP to Xray on port 12345 and mark with 0x1
+-A XRAY -p udp -j TPROXY --on-ip 127.0.0.1 --on-port 12345 --tproxy-mark 1
+-A XRAY -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port 12345 --tproxy-mark 1
+-A PREROUTING -j XRAY
+
+# --- OUTPUT CHAIN (Traffic originating from the server itself) ---
+# Similar logic to XRAY: exclude local, exclude non-mimicry, exclude marked
+-A XRAY_MASK -d 10.1.0.0/16 -j RETURN
+-A XRAY_MASK ! -d 10.0.0.0/8 -j RETURN
+-A XRAY_MASK -m mark --mark 0xff -j RETURN
+# Mark traffic for table 100 routing (handled by routing.sh)
+-A XRAY_MASK -p udp -j MARK --set-mark 1
+-A XRAY_MASK -p tcp -j MARK --set-mark 1
+-A OUTPUT -j XRAY_MASK
+
+# --- DIVERT Optimization ---
+# Helps maintain established TCP connections more efficiently
+-A DIVERT -j MARK --set-mark 1
+-A DIVERT -j ACCEPT
+-I PREROUTING -p tcp -m socket -j DIVERT
+
+COMMIT
+
+*filter
+# Allow the traffic we've marked and intercepted to pass through the firewall
+-A ufw-before-forward -s 10.1.0.0/16 -d 10.1.0.0/16 -j ACCEPT
+-A ufw-before-forward -s 10.1.0.0/16 -d 10.0.0.0/8 -m mark --mark 0x1 -j ACCEPT
+
+-A ufw-before-input -s 10.1.0.0/16 -d 10.1.0.0/16 -j ACCEPT
+-A ufw-before-input -s 10.1.0.0/16 -d 10.0.0.0/8 -m mark --mark 0x1 -j ACCEPT

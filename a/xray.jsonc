@@ -1,0 +1,169 @@
+{
+  // ==========================================
+  // SERVER A: CENTRAL HUB (Subnet: 10.1.0.0/16)
+  // ==========================================
+  // This node is the "Master Router" for your 10.0.0.0/8 mimicry.
+  // It handles:
+  // 1. Inbound connections from Spokes (B & C).
+  // 2. DNS Resolution (via AdGuard Home).
+  // 3. Routing between all 10.x.x.x subnets.
+
+  "log": {
+    "loglevel": "info"
+  },
+
+  "dns": {
+    "servers": [
+      // Centralized DNS for the entire 10.0.0.0/8 network.
+      // AdGuard Home is expected to be reachable at 10.1.1.3.
+      "10.1.1.3"
+    ]
+  },
+
+  "inbounds": [
+    {
+      // MAIN PUBLIC INBOUND
+      // Listens on 443 for incoming connections from Server B and C.
+      // Uses VLESS with XTLS-Vision for high performance and modern encryption.
+      "address": "0.0.0.0",
+      "port": 443,
+      "protocol": "vless",
+      "tag": "proxy-direct",
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
+      },
+      "settings": {
+        "clients": [
+          // SERVER B: Two connections - one for reverse tunnel, one for direct proxy.
+          {
+            "email": "b-reverse",
+            "id": "REPLACE_WITH_UUID_B_REVERSE",
+            "reverse": { "tag": "reverse-b" }
+          },
+          {
+            "email": "b-direct",
+            "id": "REPLACE_WITH_UUID_B_DIRECT"
+          },
+          // SERVER C: Similar setup to B.
+          {
+            "email": "c-reverse",
+            "id": "REPLACE_WITH_UUID_C_REVERSE",
+            "reverse": { "tag": "reverse-c" }
+          },
+          {
+            "email": "c-direct",
+            "id": "REPLACE_WITH_UUID_C_DIRECT"
+          }
+        ],
+        "flow": "xtls-rprx-vision",
+        "decryption": "none",
+        "fallbacks": [
+          {
+            // CAMOUFLAGE: If an unauthorized user hits 443, forward them to Nginx.
+            // This hides the fact that an Xray instance is running.
+            "dest": "10.1.1.4:8080" 
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "tls",
+        "tlsSettings": {
+          "alpn": ["h2", "http/1.1"],
+          "certificates": [
+            {
+              // Path to SSL certificates (mapped via Docker volumes).
+              "certificateFile": "/etc/letsencrypt/live/A-DOMAIN/fullchain.pem",
+              "keyFile": "/etc/letsencrypt/live/A-DOMAIN/privkey.pem"
+            }
+          ]
+        }
+      }
+    },
+    {
+      // TPROXY INBOUND (Host Interception)
+      // This inbound "catches" traffic from the host's kernel that was
+      // marked by IPTables (before.rules).
+      "tag": "proxy-enclave",
+      "listen": "127.0.0.1",
+      "port": 12345,
+      "protocol": "tunnel",
+      "settings": {
+        "network": "tcp,udp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"],
+        "routeOnly": true
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy",
+          "mark": 255 // Mark 255 prevents Xray from intercepting its own output.
+        }
+      }
+    }
+  ],
+
+  "outbounds": [
+    {
+      // FREEDOM OUTBOUND: Standard direct connection to the internet.
+      "tag": "forward-direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIP"
+      },
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255
+        }
+      }
+    },
+    {
+      // DNS OUTBOUND: Ensures all DNS traffic is sent to the local AdGuard resolver.
+      "tag": "forward-dns",
+      "protocol": "dns",
+      "settings": {
+        "address": "10.1.1.3",
+        "port": 53,
+        "nonIPQuery": "skip"
+      }
+    }
+  ],
+
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        // Enforce centralized DNS for all queries.
+        "port": "53",
+        "network": "udp,tcp",
+        "outboundTag": "forward-dns"
+      },
+      {
+        // Internal subnet 10.1.x.x traffic is handled directly on this node.
+        "inboundTag": ["proxy-direct"],
+        "ip": ["10.1.0.0/16"],
+        "outboundTag": "forward-direct"
+      },
+      {
+        // TRAFFIC TO SPOKE B (10.2.x.x):
+        // If traffic is destined for Server B's range, send it through
+        // the reverse tunnel initiated by Server B.
+        "inboundTag": ["proxy-enclave"],
+        "ip": ["10.2.0.0/16"],
+        "outboundTag": "reverse-b"
+      },
+      {
+        // TRAFFIC TO SPOKE C (10.3.x.x):
+        // Similar to above, send through Server C's reverse tunnel.
+        "inboundTag": ["proxy-enclave"],
+        "ip": ["10.3.0.0/16"],
+        "outboundTag": "reverse-c"
+      }
+    ]
+  }
+}
